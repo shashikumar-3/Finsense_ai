@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+node_modules/
+client/node_modules/
+Rag_model/venv/
+Rag_model/venv_py311_backup_20260506/
+Rag_model/venv_py314_backup_20260506/
+Rag_model/chroma_db/
+client/dist/
+client/.vite/
+*.log
