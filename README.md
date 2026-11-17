@@ -4,6 +4,97 @@ FinSense AI is a stock and personal-finance intelligence application for Indian-
 
 The application is designed to keep calculations and retrieved evidence separate from interpretation. Missing market, news or macroeconomic data is reported as unavailable rather than replaced with fabricated values.
 
+## About the project
+
+FinSense AI is a decision-support platform for investors who want one place to understand their stocks, portfolio behavior and long-term financial plans. It combines deterministic financial calculations with evidence-grounded AI explanations so that users can explore market information without confusing a model interpretation with a verified financial fact.
+
+The project is built for the Indian market. Stock symbols are normalized for NSE usage, financial values are displayed in Indian rupees, and the application supports Indian-focused portfolio accounting, news retrieval, macroeconomic scenarios and Supabase-backed user data.
+
+### What problem it solves
+
+Investment information is usually spread across price data, financial statements, news feeds, transaction records and personal goals. FinSense AI brings these sources together and gives them separate, traceable roles:
+
+- Market data describes observed prices, volume and technical indicators.
+- Company data describes available fundamentals, statements and business metadata.
+- News data provides dated headlines, publishers, article links and sentiment when usable articles are available.
+- Portfolio data records the user's authenticated transactions and calculates holdings, cost basis and P&L.
+- Planning data models savings, goals, inflation and future-wealth scenarios.
+- AI explains retrieved evidence but does not replace missing values or alter financial calculations.
+
+The result is intended to help users ask better questions, identify data limitations, compare evidence and understand the trade-offs in a decision. It is not an automated trading system, a return guarantee or personalized financial advice.
+
+## Product architecture
+
+FinSense AI uses a layered architecture:
+
+1. The React/Vite client provides the dashboard, stock detail, portfolio, behavior, insights, planner, reports and profile experiences.
+2. The Express server owns authenticated API routes, validation, portfolio calculations, report generation and orchestration between the client and data services.
+3. Supabase provides authentication, PostgreSQL persistence and row-level security for user-owned records.
+4. The Python layer retrieves and normalizes market data, company fundamentals, technical indicators and news, and provides the existing RAG/FinRobot integration.
+5. External providers supply market, news, macroeconomic and optional LLM data. Provider failures are represented explicitly so the UI can distinguish unavailable data from a real zero value.
+
+The important design boundary is that deterministic services produce the financial facts and scores first. AI is used for conversational explanation, summaries and contextual interpretation of those facts. An AI response must not invent a headline, metric, price, sector, article body or macroeconomic observation.
+
+## Main modules
+
+### Authentication and profile preferences
+
+Users can sign up, sign in, use Google OAuth where configured, restore sessions and access protected pages. Profile preferences control supported experience features such as dark mode, dashboard density, motion, behavior alerts, macro scenarios and trading warnings. Preferences are persisted per authenticated user through the existing Supabase flow.
+
+### Stock intelligence
+
+The Stocks area lets users search supported stocks and inspect company identity, sector and industry metadata, valuation, profitability, financial health, growth, statements, price history and technical indicators. The stock-strength view combines available fundamentals, technicals, news and observable attention signals with explicit evidence coverage. Missing components are not silently treated as zero.
+
+### Conversational stock analyst
+
+The Stock Detail analyst is a stock-specialized, multi-turn assistant. It keeps the selected symbol and bounded conversation context, identifies the user's question, retrieves relevant evidence and answers in a structured format. Follow-up questions such as “explain the first article,” “what about its debt?” or “can it move 3%?” are resolved against the current conversation and selected stock.
+
+News answers use actual normalized articles when available, including headline, publisher, publication time, provider and URL. NewsAPI is used when available and Google News RSS is the configured fallback. HTTP 429 responses trigger cooldown-aware behavior instead of repeated quota-consuming retries. If only a headline is available, the assistant says that the article body could not be verified.
+
+### News and sentiment
+
+The news pipeline fetches company-relevant articles, normalizes timestamps, removes duplicates, validates freshness, ranks newest articles first and calculates sentiment only from eligible usable articles. The UI shows provider and coverage information and distinguishes current, historical, stale and unavailable news. A provider failure does not break the rest of stock intelligence.
+
+### Portfolio intelligence
+
+Users can create portfolios and record buys and sells. The server-side accounting engine matches sales against acquisition lots using FIFO, calculates remaining quantity and cost basis, realized and unrealized P&L, market value and configurable estimated tax. Current quotes are required for current valuation; transaction prices are never substituted for live market prices.
+
+Portfolio views include holdings, concentration, sector allocation, transaction history, portfolio reports and grounded AI insights. Sector allocation uses verified stock metadata and keeps an explicit Unknown category when metadata cannot be obtained. AI portfolio insights explain concentration, diversification and risk context from computed portfolio facts, while deterministic analysis remains available if an external LLM is unavailable.
+
+### Behavior analyzer
+
+The Behavior module examines authenticated transaction history for evidence-based patterns such as completed buy/sell episodes, holding behavior and risk indicators. Concentration uses compatible current quotes and displays coverage limitations when some holdings cannot be valued. The module is educational analysis, not a diagnosis of the user's personality or a personalized instruction to trade.
+
+### Economic Ripple Simulator
+
+Insights provides hypothetical sensitivity scenarios for supported macroeconomic variables such as RBI repo rate, CPI inflation, USD/INR, crude oil, GDP growth and government bond yields. The simulator applies configured sector-variable coefficients to a selected stock or requested portfolio and renders modeled stock and sector impacts.
+
+The current `ripple-heuristic-v1` model is explicitly illustrative. Its outputs are sensitivity estimates rather than forecasts or price targets. Stored economic observations include their source and timestamp; unavailable live baselines are not replaced by hardcoded “current” values. The AI explanation describes which shock affected which configured sector relationship and preserves the model's limitations.
+
+### Financial Planner
+
+The planner stores a user's profile, income, expenses, assets and goals. It calculates monthly surplus, contributions, compound projections, inflation-adjusted purchasing power, emergency-fund status, goal gaps and life-event effects. The chart separates nominal wealth from today's purchasing power, and explanations identify assumptions such as annual return, inflation and projection horizon. These are estimates, not guarantees.
+
+### Reports and exports
+
+Reports reuse server-side portfolio, stock and planner calculations. They provide structured report data and export paths for PDF and CSV. Reports are authorized against the authenticated user, preserve missing-data states and avoid trusting client-supplied financial totals.
+
+## Typical data flow
+
+For a stock question, the flow is:
+
+`user question → selected stock context → intent identification → relevant provider/RAG retrieval → freshness and availability validation → grounded evidence context → AI or deterministic explanation → sources and limitations`
+
+For a portfolio calculation, the flow is:
+
+`authenticated transactions → server-side validation → FIFO/accounting engine → verified quote and metadata lookup → portfolio metrics → UI, report or grounded explanation`
+
+For a macro scenario, the flow is:
+
+`scenario inputs → validation → configured economic coefficients → stock/sector/portfolio sensitivity → chart data → limitation-aware explanation`
+
+This separation prevents a failed news provider from erasing fundamentals, prevents an unavailable quote from becoming a fabricated market value, and prevents an AI fallback from pretending that it retrieved evidence it did not receive.
+
 ## Included capabilities
 
 - Supabase authentication, profiles and per-user settings.
