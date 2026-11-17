@@ -1,12 +1,16 @@
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import AppShell from './components/AppShell'
+import LoadingScreen from './components/LoadingScreen'
 import { ProtectedRoute, PublicOnlyRoute } from './components/RouteGuards'
 import AnalyticsPage from './pages/AnalyticsPage'
+import BehaviorPage from './pages/BehaviorPage'
 import DashboardPage from './pages/DashboardPage'
 import InsightsPage from './pages/InsightsPage'
+import FinancialPlannerPage from './pages/FinancialPlannerPage'
 import LoginPage from './pages/LoginPage'
 import ProfilePage from './pages/ProfilePage'
+import PortfolioPage from './pages/PortfolioPage'
 import ReportsPage from './pages/ReportsPage'
 import SignInPage from './pages/SignInPage'
 import StockDetailPage from './pages/StockDetailPage'
@@ -23,7 +27,11 @@ function ProtectedAppLayout() {
 
 function App() {
   const location = useLocation()
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, isAuthLoading } = useAuth()
+
+  if (isAuthLoading) {
+    return <LoadingScreen message="Loading FinSense AI..." />
+  }
 
   return (
     <AnimatePresence mode="wait">
@@ -45,9 +53,12 @@ function App() {
             <Route path="/stocks/:symbol" element={<StockDetailPage />} />
             <Route path="/dashboard" element={<Navigate to="/home" replace />} />
             <Route path="/analytics" element={<AnalyticsPage />} />
+            <Route path="/behavior" element={<BehaviorPage />} />
             <Route path="/insights" element={<InsightsPage />} />
+            <Route path="/planner" element={<FinancialPlannerPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/portfolio" element={<PortfolioPage />} />
             <Route path="/settings" element={<Navigate to="/profile?tab=settings" replace />} />
           </Route>
         </Route>

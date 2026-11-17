@@ -6,6 +6,7 @@ import {
   CandlestickChart,
   CircleUserRound,
   Landmark,
+  WalletCards,
   Radar,
   Sparkles,
 } from 'lucide-react'
@@ -15,8 +16,10 @@ export const navItems = [
   { label: 'Stocks', path: '/stocks', icon: BadgeIndianRupee },
   { label: 'Analytics', path: '/analytics', icon: Activity },
   { label: 'Insights', path: '/insights', icon: BrainCircuit },
+  { label: 'Financial Planner', path: '/planner', icon: Sparkles },
   { label: 'Reports', path: '/reports', icon: Radar },
-  { label: 'Profile', path: '/profile', icon: BriefcaseBusiness },
+  { label: 'Portfolio', path: '/portfolio', icon: WalletCards },
+  { label: 'Behavior', path: '/behavior', icon: BrainCircuit },
 ]
 
 export const heroMetrics = [

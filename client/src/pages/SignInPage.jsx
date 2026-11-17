@@ -16,29 +16,34 @@ function SignInPage() {
   const { signUp, loginWithGoogle } = useAuth()
   const [formData, setFormData] = useState(initialForm)
   const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault()
-    const result = signUp(formData)
+    setError('')
+    setMessage('')
+    const result = await signUp(formData)
 
     if (!result.ok) {
       setError(result.message)
+      return
+    }
+
+    if (result.requiresEmailConfirmation) {
+      setMessage('Account created. Check your email to confirm your address before logging in.')
       return
     }
 
     navigate('/home', { replace: true })
   }
 
-  async function handleGoogleSignIn(credential) {
+  async function handleGoogleSignIn() {
     setError('')
-    const result = await loginWithGoogle(credential)
+    const result = await loginWithGoogle()
 
     if (!result.ok) {
       setError(result.message)
-      return
     }
-
-    navigate('/home', { replace: true })
   }
 
   return (
@@ -59,7 +64,7 @@ function SignInPage() {
         <p className="text-xs uppercase tracking-[0.28em] text-cyan">New account</p>
         <h2 className="mt-3 font-display text-3xl text-white">Sign Up</h2>
         <p className="mt-3 text-sm leading-7 text-slate-400">
-          Create a local demo account. The app logs you in immediately after registration.
+          Create your FinSense account. Email confirmation may be required before you log in.
         </p>
       </div>
 
@@ -122,6 +127,12 @@ function SignInPage() {
         {error ? (
           <div className="rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
             {error}
+          </div>
+        ) : null}
+
+        {message ? (
+          <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+            {message}
           </div>
         ) : null}
 

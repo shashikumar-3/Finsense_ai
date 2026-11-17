@@ -1,12 +1,13 @@
 import { RefreshCw, Search } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { fetchStockIntelligence, searchStockIntelligence } from '../api/intelligenceApi'
+import { fetchStockIntelligenceBatch } from '../api/intelligenceApi'
 import { fetchNseStocks } from '../api/stocksApi'
 import { shortSymbolLabel } from '../data/stocksData'
+import { newsDisplayState } from '../lib/newsFreshness'
 
 const STOCK_LIST_LIMIT = 24
-const INTELLIGENCE_BATCH_SIZE = 6
+const INTELLIGENCE_BATCH_SIZE = 24
 
 function formatUpdatedAt(value) {
   if (!value) {
@@ -63,8 +64,11 @@ function StocksPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [intelligenceLoading, setIntelligenceLoading] = useState(true)
   const [hydratingIntelligence, setHydratingIntelligence] = useState(false)
+  const [directoryStale, setDirectoryStale] = useState(false)
+  const stockRequestRef = useRef(0)
+  const intelligenceBySymbolRef = useRef({})
+  const intelligenceInFlightRef = useRef(new Map())
 
   const mergeIntelligenceItems = useCallback((items = []) => {
     if (!items.length) {
@@ -83,23 +87,14 @@ function StocksPage() {
         next[shortSymbolLabel(document.symbol)] = document
       }
 
+      intelligenceBySymbolRef.current = next
+
       return next
     })
   }, [])
 
-  const loadIntelligence = useCallback(async () => {
-    try {
-      setIntelligenceLoading(true)
-      const data = await searchStockIntelligence({ limit: 100 })
-      mergeIntelligenceItems((data.results || []).map((item) => item?.document).filter(Boolean))
-    } catch {
-      setIntelligenceBySymbol({})
-    } finally {
-      setIntelligenceLoading(false)
-    }
-  }, [mergeIntelligenceItems])
-
   const loadStocks = useCallback(async ({ search = '', silent = false } = {}) => {
+    const requestId = ++stockRequestRef.current
     try {
       if (!silent) {
         setLoading(true)
@@ -108,14 +103,24 @@ function StocksPage() {
       }
 
       setError('')
+      setStocks([])
+      setTotal(0)
       const data = await fetchNseStocks({ search, limit: STOCK_LIST_LIMIT, offset: 0 })
+      if (requestId !== stockRequestRef.current) return
       setStocks(data.stocks || [])
       setTotal(Number(data.total) || 0)
+      setDirectoryStale(data.stale === true)
     } catch (err) {
+      if (requestId !== stockRequestRef.current) return
+      setStocks([])
+      setTotal(0)
+      setDirectoryStale(false)
       setError(err.message || 'Unable to load stocks.')
     } finally {
-      setLoading(false)
-      setRefreshing(false)
+      if (requestId === stockRequestRef.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [])
 
@@ -132,11 +137,10 @@ function StocksPage() {
   }, [debouncedQuery, loadStocks])
 
   useEffect(() => {
-    loadIntelligence()
-  }, [loadIntelligence])
-
-  useEffect(() => {
     let cancelled = false
+    const controller = new AbortController()
+    const requestToken = {}
+    let requestedSymbols = []
 
     async function hydrateVisibleStocks() {
       if (loading || !stocks.length) {
@@ -145,26 +149,31 @@ function StocksPage() {
 
       const missingSymbols = stocks
         .map((stock) => shortSymbolLabel(stock.symbol))
-        .filter((symbol) => !intelligenceBySymbol[symbol])
+        .filter((symbol) => !intelligenceBySymbolRef.current[symbol] && !intelligenceInFlightRef.current.has(symbol))
 
       if (!missingSymbols.length) {
         return
       }
 
       setHydratingIntelligence(true)
+      requestedSymbols = missingSymbols
+      missingSymbols.forEach((symbol) => intelligenceInFlightRef.current.set(symbol, requestToken))
 
       try {
         for (let index = 0; index < missingSymbols.length; index += INTELLIGENCE_BATCH_SIZE) {
-          if (cancelled) {
+          if (cancelled || controller.signal.aborted) {
             return
           }
 
           const batch = missingSymbols.slice(index, index + INTELLIGENCE_BATCH_SIZE)
-          const batchItems = await Promise.all(
-            batch.map((symbol) =>
-              fetchStockIntelligence(symbol, { includeNews: true, cachedOnly: true }),
-            ),
-          )
+          const batchItems = await fetchStockIntelligenceBatch(batch, {
+            includeNews: true,
+            // The stock board must be able to refresh stale/missing news. The
+            // backend still reuses fresh records, so this does not force a
+            // provider request for every render.
+            cachedOnly: false,
+            signal: controller.signal,
+          })
 
           if (cancelled) {
             return
@@ -174,6 +183,11 @@ function StocksPage() {
         }
       } catch {
       } finally {
+        requestedSymbols.forEach((symbol) => {
+          if (intelligenceInFlightRef.current.get(symbol) === requestToken) {
+            intelligenceInFlightRef.current.delete(symbol)
+          }
+        })
         if (!cancelled) {
           setHydratingIntelligence(false)
         }
@@ -184,8 +198,14 @@ function StocksPage() {
 
     return () => {
       cancelled = true
+      requestedSymbols.forEach((symbol) => {
+        if (intelligenceInFlightRef.current.get(symbol) === requestToken) {
+          intelligenceInFlightRef.current.delete(symbol)
+        }
+      })
+      controller.abort()
     }
-  }, [intelligenceBySymbol, loading, mergeIntelligenceItems, stocks])
+  }, [loading, mergeIntelligenceItems, stocks])
 
   const marketStats = useMemo(
     () => ({
@@ -244,7 +264,7 @@ function StocksPage() {
               <p className="mt-1 text-sm text-slate-300">Find a stock quickly by symbol or full company name.</p>
             </div>
             <p className="rounded-full border border-cyan/20 bg-cyan/10 px-3 py-1 text-xs font-medium text-cyan">
-              {hydratingIntelligence ? 'Indexing live intelligence' : 'Live NSE directory'}
+              {hydratingIntelligence ? 'Indexing live intelligence' : directoryStale ? 'Stale NSE cache' : 'Live NSE directory'}
             </p>
           </div>
 
@@ -266,6 +286,10 @@ function StocksPage() {
         <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">{error}</div>
       ) : null}
 
+      {directoryStale && !error ? (
+        <div className="rounded-2xl border border-amber-400/25 bg-amber-400/10 p-4 text-sm text-amber-200">The official NSE directory could not be refreshed. Showing the last known supported directory; refresh again later to retry.</div>
+      ) : null}
+
       {loading ? (
         <div className="animate-pulse rounded-3xl border border-white/10 bg-white/[0.03] p-6 text-slate-300">Loading NSE stock list...</div>
       ) : !stocks.length ? (
@@ -283,10 +307,12 @@ function StocksPage() {
             {stocks.map((stock) => (
               (() => {
                 const intelligence = intelligenceBySymbol[shortSymbolLabel(stock.symbol)]
+                const newsState = newsDisplayState(intelligence?.news)
                 const recommendation =
-                  intelligence?.analysis?.recommendation ||
+                  newsState === 'current' ? intelligence?.analysis?.recommendation :
+                  newsState === 'historical' ? 'Recent news is unavailable; cached articles are historical only.' :
                   (hydratingIntelligence ? 'Building live intelligence for this stock...' : 'No stored intelligence yet for this stock.')
-                const sentiment = intelligence?.news?.overall_sentiment || (hydratingIntelligence ? 'Loading' : 'Unavailable')
+                const sentiment = newsState === 'current' ? intelligence?.news?.overall_sentiment || 'Unknown' : (hydratingIntelligence ? 'Loading' : 'Unavailable')
                 const trend = intelligence?.market?.trend || (hydratingIntelligence ? 'Indexing' : 'Unindexed')
                 const lastUpdated = formatUpdatedAt(intelligence?.updated_at)
 
@@ -304,7 +330,7 @@ function StocksPage() {
                     <div>
                       <p className="truncate text-sm text-slate-300">{stock.name || stock.symbol}</p>
                       <p className="mt-2 text-xs text-slate-500">
-                        {intelligenceLoading && !intelligence ? 'Loading intelligence state...' : `Last updated ${lastUpdated}`}
+                        {!intelligence ? (hydratingIntelligence ? 'Loading intelligence state...' : 'Not indexed') : `Last updated ${lastUpdated}`}
                       </p>
                     </div>
 

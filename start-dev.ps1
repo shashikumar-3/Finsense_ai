@@ -13,9 +13,21 @@ function Stop-PortProcesses {
   }
 }
 
+function Stop-ProjectServerProcesses {
+  $projectServerProcesses = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -match 'Finsense_ai_Copy[\\/]server[\\/]server\.js' }
+
+  foreach ($process in $projectServerProcesses) {
+    if ($process.ProcessId -and $process.ProcessId -ne $PID) {
+      Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+  }
+}
+
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $clientPath = Join-Path $projectRoot 'client'
 
+Stop-ProjectServerProcesses
 Stop-PortProcesses -Port 5000
 Stop-PortProcesses -Port 5173
 

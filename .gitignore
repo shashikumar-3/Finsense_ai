@@ -4,9 +4,25 @@
 node_modules/
 client/node_modules/
 Rag_model/venv/
+Rag_model/venv_*/
+Rag_model/**/__pycache__/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
 Rag_model/venv_py311_backup_20260506/
 Rag_model/venv_py314_backup_20260506/
 Rag_model/chroma_db/
+Rag_model/pipeline/data/embedding_cache.json
 client/dist/
 client/.vite/
+dist/
+build/
+tmp/
+tmp-*.log
+data/yfinance_cache/
+structure.txt
+last done.md
 *.log

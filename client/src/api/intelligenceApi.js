@@ -25,6 +25,23 @@ export async function fetchStockIntelligence(
   return parseJson(response)
 }
 
+export async function fetchStockIntelligenceBatch(
+  symbols,
+  { includeNews = true, cachedOnly = true, signal } = {},
+) {
+  const query = new URLSearchParams({
+    symbols: symbols.join(','),
+    includeNews: String(includeNews),
+    cachedOnly: String(cachedOnly),
+  })
+  const response = await fetch(`${API_BASE_URL}/api/intelligence/stocks?${query.toString()}`, { signal })
+  const data = await parseJson(response)
+  if (!Array.isArray(data?.items)) {
+    throw new Error('Intelligence service returned an invalid stock batch.')
+  }
+  return data.items
+}
+
 export async function refreshStockIntelligence(payload) {
   const response = await fetch(`${API_BASE_URL}/api/intelligence/refresh`, {
     method: 'POST',

@@ -1,4 +1,5 @@
 import { Check, ChevronRight } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import PageHeader from '../components/PageHeader'
 import SectionCard from '../components/SectionCard'
@@ -8,15 +9,17 @@ import {
   settingsGroups,
 } from '../data/mockData'
 import { useAuth } from '../context/AuthContext'
+import { supabase } from '../lib/supabase'
+import { normalizePreferences, readPreferences, writePreferences } from '../lib/preferences'
 
 const tabs = [
   { id: 'overview', label: 'Overview' },
   { id: 'settings', label: 'Settings' },
 ]
 
-function Toggle({ enabled }) {
+function Toggle({ enabled, label, disabled, onClick }) {
   return (
-    <div
+    <button type="button" role="switch" aria-label={label} aria-checked={enabled} disabled={disabled} onClick={onClick}
       className={`flex h-8 w-14 items-center rounded-full border p-1 transition ${
         enabled ? 'border-cyan/20 bg-neon shadow-neon' : 'border-white/10 bg-white/10'
       }`}
@@ -26,8 +29,17 @@ function Toggle({ enabled }) {
           enabled ? 'translate-x-6' : 'translate-x-0'
         }`}
       />
-    </div>
+    </button>
   )
+}
+
+const settingKeys = {
+  'Adaptive dark mode': 'adaptiveDarkMode',
+  'Compact dashboard density': 'compactDashboardDensity',
+  'Motion-enhanced transitions': 'motionEnhancedTransitions',
+  'Behavioral alerts': 'behavioralAlerts',
+  'Macro ripple scenarios': 'macroRippleScenarios',
+  'High-risk trading warnings': 'highRiskTradingWarnings',
 }
 
 function ProfilePage() {
@@ -36,6 +48,32 @@ function ProfilePage() {
   const activeTab = tabs.some((tab) => tab.id === searchParams.get('tab'))
     ? searchParams.get('tab')
     : 'overview'
+  const [preferences, setPreferences] = useState(() => readPreferences(user))
+  const [savingPreference, setSavingPreference] = useState('')
+  const [preferenceError, setPreferenceError] = useState('')
+  const preferenceQueue = useRef(Promise.resolve())
+
+  useEffect(() => setPreferences(readPreferences(user)), [user?.id, user?.preferences])
+
+  async function togglePreference(key) {
+    preferenceQueue.current = preferenceQueue.current.then(async () => {
+      const current = readPreferences(user)
+      const next = normalizePreferences({ ...current, [key]: !current[key] })
+      setSavingPreference(key)
+      setPreferenceError('')
+      try {
+        const { error } = await supabase.auth.updateUser({ data: { finsense_preferences: next } })
+        if (error) throw error
+        setPreferences(next)
+        writePreferences(user, next)
+      } catch (error) {
+        setPreferenceError(error.message || 'Unable to save this preference.')
+      } finally {
+        setSavingPreference('')
+      }
+    })
+    await preferenceQueue.current
+  }
 
   const profileSummary = {
     name: user.name,
@@ -140,6 +178,7 @@ function ProfilePage() {
         ) : (
           <SectionCard title="Settings" subtitle="Settings are now nested directly under Profile.">
             <div className="space-y-6">
+              {preferenceError ? <div role="alert" className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200">{preferenceError}</div> : null}
               {settingsGroups.map((group) => (
                 <div key={group.title} className="rounded-[28px] border border-white/10 bg-white/[0.03] p-5">
                   <h3 className="font-display text-xl text-white">{group.title}</h3>
@@ -152,10 +191,10 @@ function ProfilePage() {
                         <div>
                           <p className="font-medium text-white">{item.name}</p>
                           <p className="mt-1 text-sm text-slate-500">
-                            Personal preference stored for this profile experience.
+                            {item.name === 'Adaptive dark mode' ? 'Controls the application colour theme.' : item.name === 'Compact dashboard density' ? 'Reduces spacing in supported dashboard layouts.' : item.name === 'Motion-enhanced transitions' ? 'Controls enhanced page transitions.' : item.name === 'Behavioral alerts' ? 'Shows optional evidence-based behavior alerts.' : item.name === 'Macro ripple scenarios' ? 'Controls the optional economic scenario experience.' : 'Shows optional high-risk trading warnings.'}
                           </p>
                         </div>
-                        <Toggle enabled={item.enabled} />
+                        <Toggle label={`Toggle ${item.name}`} enabled={preferences[settingKeys[item.name]]} disabled={savingPreference === settingKeys[item.name]} onClick={() => void togglePreference(settingKeys[item.name])} />
                       </div>
                     ))}
                   </div>

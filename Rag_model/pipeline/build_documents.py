@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,6 +83,31 @@ def _coerce_existing_news(existing_document: dict[str, Any] | None, symbol: str)
     }
 
 
+def _reuse_cached_news_after_failure(
+    existing_document: dict[str, Any] | None,
+    failed_news: dict[str, Any],
+) -> dict[str, Any]:
+    existing_news = (existing_document or {}).get("news")
+    if (
+        not isinstance(existing_news, dict)
+        or not existing_news.get("articles")
+        and not existing_news.get("top_headlines")
+    ):
+        return failed_news
+
+    cached_news = dict(existing_news)
+    cached_news["is_current"] = False
+    cached_news["historical_only"] = True
+    cached_news["freshness_status"] = "stale"
+    cached_news["freshness"] = {
+        "status": "historical",
+        "max_age_days": 90,
+    }
+    cached_news["error"] = failed_news.get("error") or "Current news is temporarily unavailable."
+    cached_news["provider_error"] = failed_news.get("error")
+    return cached_news
+
+
 def ensure_data_dir() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -126,9 +152,20 @@ def _safe_float(value: Any) -> float | None:
     try:
         if value is None:
             return None
-        return round(float(value), 4)
+        number = float(value)
+        return round(number, 4) if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
+
+
+def _sanitize_json_values(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _sanitize_json_values(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_json_values(item) for item in value]
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value
 
 
 def _summarize_market(market: dict[str, Any]) -> str:
@@ -136,16 +173,16 @@ def _summarize_market(market: dict[str, Any]) -> str:
         return market.get("error", "Market analysis unavailable.")
 
     parts = [
-        f"Price {market.get('price')}",
+        f"Price {_safe_float(market.get('price'))}",
         f"trend {market.get('trend')}",
         f"RSI {_safe_float(market.get('rsi'))}",
         f"SMA20 {_safe_float(market.get('sma_20'))}",
         f"SMA50 {_safe_float(market.get('sma_50'))}",
         f"SMA200 {_safe_float(market.get('sma_200'))}",
         f"EMA20 {_safe_float(market.get('ema_20'))}",
-        f"volume {market.get('volume')}",
-        f"sector {market.get('sector') or 'Unknown'}",
-        f"industry {market.get('industry') or 'Unknown'}",
+        f"volume {_safe_float(market.get('volume'))}",
+        f"sector {market.get('sector') or 'Not available from current provider'}",
+        f"industry {market.get('industry') or 'Not available from current provider'}",
     ]
 
     macd = market.get("macd") or {}
@@ -187,8 +224,9 @@ def _build_market_summary_structured(market: dict[str, Any]) -> dict[str, Any]:
             {"label": "Price", "value": market.get("price")},
             {"label": "Previous Close", "value": market.get("previous_close")},
             {"label": "Volume", "value": market.get("volume")},
-            {"label": "Sector", "value": market.get("sector") or "Unknown"},
-            {"label": "Industry", "value": market.get("industry") or "Unknown"},
+            {"label": "Sector", "value": market.get("sector") or "Not available from current provider"},
+            {"label": "Industry", "value": market.get("industry") or "Not available from current provider"},
+            {"label": "Metadata source", "value": market.get("metadata_source") or "Yahoo Finance (unavailable)"},
         ],
         "trend_signals": [
             {"label": "Trend", "value": market.get("trend") or "Unknown"},
@@ -309,12 +347,17 @@ def build_stock_document(
     symbol = (symbol or "").strip().upper().removesuffix(".NS")
     company_name = (company_name or "").strip()
     now_iso = utc_now_iso()
-    market = analyze_stock(symbol)
+    market = _sanitize_json_values(analyze_stock(symbol))
+    if market.get("is_valid") and market.get("price") is None:
+        market["is_valid"] = False
+        market["error"] = "Market price unavailable."
     should_refresh_news = include_news if refresh_news is None else refresh_news
     news_refreshed = False
 
     if include_news and should_refresh_news:
         news = process_stock_news(symbol)
+        if not news.get("is_valid"):
+            news = _reuse_cached_news_after_failure(existing_document, news)
         news_refreshed = True
         news_updated_at = now_iso
     else:

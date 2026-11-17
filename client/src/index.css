@@ -4,6 +4,18 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Portfolio transaction symbol suggestions stay below the modal field instead
+   of covering the application navigation. */
+div.fixed.inset-x-4.top-24 {
+  top: 14rem;
+}
+
+@media (max-width: 640px) {
+  div.fixed.inset-x-4.top-24 {
+    top: 12rem;
+  }
+}
+
 :root {
   color-scheme: dark;
   font-synthesis: none;
@@ -263,4 +275,34 @@ body::after {
 
 .google-button-shell iframe {
   max-width: 100%;
+}
+
+/* While the search field is focused, keep quick selection out of the
+   dropdown's stacking area. Clearing the query or leaving the field restores
+   the normal panel layout. */
+.glass-panel:has(#analytics-stock-search:focus) > div:nth-of-type(2) {
+  display: none;
+}
+
+html[data-density='compact'] .glass-panel {
+  padding: 1rem;
+}
+
+html[data-motion='reduced'] *,
+html[data-motion='reduced'] *::before,
+html[data-motion='reduced'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+html[data-theme='light'] body {
+  background: #eef7f2;
+  color: #163129;
+}
+
+html[data-theme='light'] .glass-panel {
+  background: rgba(255, 255, 255, 0.78);
+  border-color: rgba(31, 94, 71, 0.18);
 }

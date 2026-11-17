@@ -1,190 +1,152 @@
-import { useEffect, useMemo, useState } from 'react'
-import { fetchStockIntelligence } from '../api/intelligenceApi'
+import { ChevronDown, Info, RefreshCw, Search, TrendingDown, TrendingUp } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import PageHeader from '../components/PageHeader'
 import SectionCard from '../components/SectionCard'
 import { ConfidenceChart, ScoreRadar } from '../components/Charts'
-import { indianStockSymbols, shortSymbolLabel } from '../data/stocksData'
+import { fetchMarketOverview, fetchNseStocks } from '../api/stocksApi'
+import { fetchStrengthAnalysis } from '../api/strengthApi'
+import { popularNseSymbols, shortSymbolLabel } from '../data/stocksData'
+
+const currencyFormatter = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 })
+const dateFormatter = new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+const nifty50Symbols = popularNseSymbols
+
+function isFiniteNumber(value) { return Number.isFinite(Number(value)) }
+function formatNumber(value, maximumFractionDigits = 2) { return isFiniteNumber(value) ? Number(value).toLocaleString('en-IN', { minimumFractionDigits: maximumFractionDigits === 2 ? 2 : 0, maximumFractionDigits }) : 'Unavailable' }
+function formatPercentRatio(value, maximumFractionDigits = 1) { return isFiniteNumber(value) ? `${(Number(value) * 100).toFixed(maximumFractionDigits)}%` : 'Unavailable' }
+function formatDate(value) {
+  if (value === null || value === undefined || value === '') return 'Unavailable'
+  const numeric = Number(value)
+  const date = Number.isFinite(numeric) ? new Date(numeric < 1e12 ? numeric * 1000 : numeric) : new Date(value)
+  return Number.isNaN(date.getTime()) ? 'Unavailable' : dateFormatter.format(date)
+}
+function formatMetric(key, value) {
+  if (value === null || value === undefined || value === '') return 'Unavailable'
+  if (['revenue_growth', 'earnings_growth', 'profit_margin', 'operating_margin', 'roe', 'roa'].includes(key)) return formatPercentRatio(value)
+  if (key === 'debt_to_equity') return `${formatNumber(value, 1)}%`
+  if (['interest_coverage', 'pe_ratio', 'price_to_book'].includes(key)) return `${formatNumber(value, 1)}x`
+  if (['operating_cash_flow', 'free_cash_flow'].includes(key)) return currencyFormatter.format(Number(value))
+  if (key === 'rsi') return formatNumber(value, 1)
+  if (['sma_20', 'sma_50', 'sma_200', 'ema_20', 'macd', 'signal', 'histogram', 'upper', 'middle', 'lower', 'close'].includes(key)) return currencyFormatter.format(Number(value))
+  return String(value)
+}
+function readableWarning(value) {
+  const warning = String(value || '')
+  return /upgrade required|provider unavailable|rate limit|429|401|403|timeout/i.test(warning) ? 'This data source is temporarily unavailable; other analysis sections remain usable.' : warning
+}
+function readableEvidence(value) {
+  const text = String(value || '')
+  const match = text.match(/^([^:]+):\s*(-?\d+(?:\.\d+)?)(.*)$/)
+  if (!match) return text
+  const label = match[1]
+  const number = Number(match[2])
+  if (/growth|margin|equity|return on equity/i.test(label) && !/score|debt\/equity/i.test(label)) return `${label}: ${formatPercentRatio(number)}`
+  if (/debt\/equity/i.test(label)) return `${label}: ${formatNumber(number, 1)}%`
+  if (/coverage|P\/E/i.test(label)) return `${label}: ${formatNumber(number, 1)}x`
+  if (/RSI/i.test(label)) return `${label}: ${formatNumber(number, 1)}${match[3]}`
+  return `${label}: ${formatNumber(number, 2)}${match[3]}`
+}
+
+function MetricRow({ label, value, help }) {
+  return <div className="flex items-start justify-between gap-4 border-b border-white/5 py-2.5 text-sm"><span className="text-slate-400">{label}{help ? <span title={help} className="ml-1 inline-flex align-middle text-slate-500"><Info className="h-3 w-3" /></span> : null}</span><span className="text-right text-slate-200">{value === null || value === undefined || value === '' ? 'Unavailable' : String(value)}</span></div>
+}
+
+function LegacyComponentCard({ title, description, interpretation, component, children }) {
+  const warnings = (component?.warnings || []).map(readableWarning).filter(Boolean)
+  return <section className="rounded-3xl border border-white/10 bg-white/[0.03] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold text-white">{title}</h3><p className="mt-1 max-w-xl text-sm leading-6 text-slate-400">{description}</p></div><span className="rounded-full border border-cyan/20 bg-cyan/10 px-3 py-1 text-xs text-cyan">{component?.status || 'Unavailable'}</span></div><p className="mt-4 text-3xl font-semibold text-white">{isFiniteNumber(component?.score) ? `${Number(component.score).toFixed(1)} / 100` : 'Unavailable'}</p><p className="mt-3 text-sm leading-6 text-slate-300">{interpretation}</p><details className="mt-4 rounded-2xl border border-white/10 bg-black/10 p-3"><summary className="cursor-pointer list-none text-sm font-medium text-cyan"><span className="inline-flex items-center gap-2">Evidence and details <ChevronDown className="h-4 w-4" /></span></summary><div className="mt-3 space-y-2 text-sm text-slate-300">{(component?.evidence || []).slice(0, 6).map((item) => <p key={item}>• {readableEvidence(item)}</p>)}{warnings.map((item) => <p key={item} className="text-amber-200">{item}</p>)}{children}</div></details></section>
+}
+
+function Change({ value }) {
+  const positive = Number(value) >= 0
+  return <span className={positive ? 'text-emerald-300' : 'text-rose-300'}>{positive ? '+' : ''}{Number(value).toFixed(2)}%</span>
+}
+
+function MarketOverview({ overview, loading, error }) {
+  const chartData = useMemo(() => {
+    const series = overview?.chart || []
+    const dates = series[0]?.points || []
+    return dates.map((point, index) => {
+      const row = { date: new Date(point.datetime).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) }
+      series.forEach((item) => { row[item.symbol] = item.points[index]?.close ?? null })
+      return row
+    })
+  }, [overview])
+  if (loading) return <div className="glass-panel rounded-3xl p-8 text-slate-300">Loading live market overview...</div>
+  if (error) return <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">{error}</div>
+  return <div className="space-y-6"><div className="grid gap-4 md:grid-cols-2">{(overview?.indexes || []).map((index) => <div key={index.symbol} className="glass-panel rounded-3xl p-5"><p className="text-xs uppercase tracking-[0.2em] text-cyan">{index.symbol}</p><div className="mt-3 flex items-end justify-between gap-4"><p className="text-3xl font-semibold text-white">{Number(index.price).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p><div className="text-right text-sm"><p><Change value={index.changePercent} /></p><p className="mt-1 text-xs text-slate-500">{Number(index.change).toFixed(2)} points</p></div></div><p className="mt-3 text-xs text-slate-500">Live Yahoo Finance index quote</p></div>)}</div><div className="grid gap-6 xl:grid-cols-[1.5fr_1fr]"><SectionCard title="Market trend" subtitle="30-day movement of the NIFTY 50 and Sensex, normalized to live index values."><div className="h-80"><ResponsiveContainer width="100%" height="100%"><LineChart data={chartData}><XAxis dataKey="date" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis hide domain={['auto', 'auto']} /><Tooltip /><Line type="monotone" dataKey="NIFTY 50" stroke="#5eead4" strokeWidth={3} dot={false} connectNulls /><Line type="monotone" dataKey="SENSEX" stroke="#60a5fa" strokeWidth={3} dot={false} connectNulls /></LineChart></ResponsiveContainer></div></SectionCard><SectionCard title="Trending in the index basket" subtitle="Three live movers from the tracked large-cap NSE basket."><div className="space-y-3">{(overview?.movers || []).map((stock) => <div key={stock.symbol} className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] p-4"><div><p className="font-semibold text-white">{stock.symbol}</p><p className="mt-1 max-w-[190px] truncate text-xs text-slate-500">{stock.name}</p></div><div className="text-right"><p className="text-sm text-slate-200">{Number(stock.price).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</p><p className="mt-1 inline-flex items-center gap-1 text-xs">{Number(stock.changePercent) >= 0 ? <TrendingUp className="h-3 w-3 text-emerald-300" /> : <TrendingDown className="h-3 w-3 text-rose-300" />}<Change value={stock.changePercent} /></p></div></div>)}</div></SectionCard></div><SectionCard title="Market intelligence" subtitle="Start with the broad market picture, then search any supported NSE stock for its individual strength analysis."><p className="text-sm leading-7 text-slate-300">The overview combines real-time index quotes, a 30-day market trend, and live movers. It is not an average of individual stock scores.</p></SectionCard></div>
+}
+
+function componentInterpretation(key, component, values) {
+  if (!component || component.status !== 'available') return 'This component does not have enough reliable data for a score.'
+  if (key === 'fundamentals') return `Summarizes usable business-quality metrics${values.sector ? ` for the ${values.sector} sector` : ''}. Valuation metrics are context, not a direct measure of business quality.`
+  if (key === 'technical') return `${values.trend || 'The current trend is unavailable'} trend based on available moving averages and momentum indicators. Current RSI: ${formatMetric('rsi', values.rsi)}. These are signals to investigate, not predictions.`
+  if (key === 'news') return values.status === 'historical' ? 'Historical articles are available, but they should not be read as current catalysts.' : values.status === 'current' ? 'Uses available recent company-specific news and sentiment evidence.' : 'Current news is unavailable and is not treated as negative sentiment.'
+  if (key === 'hype') return component.category ? `${component.category} based on observable price, volume, and current-news activity where available. This does not prove manipulation, a bubble, or overvaluation.` : 'Measures observable attention signals only; social-media activity is not measured.'
+  return ''
+}
+function formatHypeSignal(signal) {
+  if (signal.name === '20-session price change') return { value: formatPercentRatio(signal.value), baseline: 'last 20 trading sessions' }
+  if (signal.name === 'Latest volume ratio') return { value: `${formatNumber(signal.value, 2)}x`, baseline: 'latest volume versus prior 20-session average' }
+  if (signal.name === 'Current article volume') return { value: `${formatNumber(signal.value, 0)} articles`, baseline: 'current provider window' }
+  return { value: formatNumber(signal.value, 2), baseline: signal.baseline || 'reported provider baseline' }
+}
+
+function StatementSection({ title, rows }) {
+  return <SectionCard title={title} subtitle="Statement periods supplied by Yahoo Finance. Missing rows remain unavailable; annual and quarterly data are never silently combined."><div className="overflow-x-auto"><table className="min-w-full text-left text-sm"><thead><tr className="border-b border-white/10 text-xs uppercase tracking-wide text-slate-500"><th className="px-2 py-2">Period</th><th className="px-2 py-2">Revenue</th><th className="px-2 py-2">Net profit</th><th className="px-2 py-2">Revenue growth</th><th className="px-2 py-2">Profit margin</th></tr></thead><tbody>{(rows || []).map((row) => <tr key={`${title}-${row.period}`} className="border-b border-white/5"><td className="px-2 py-2 text-slate-300">{formatDate(row.period)}</td><td className="px-2 py-2 text-slate-300">{row.revenue == null ? 'Unavailable' : currencyFormatter.format(row.revenue)}</td><td className="px-2 py-2 text-slate-300">{row.net_profit == null ? 'Unavailable' : currencyFormatter.format(row.net_profit)}</td><td className="px-2 py-2 text-slate-300">{formatPercentRatio(row.revenue_growth)}</td><td className="px-2 py-2 text-slate-300">{formatPercentRatio(row.net_profit_margin)}</td></tr>)}</tbody></table></div>{!rows?.length ? <p className="text-sm text-slate-400">This statement history is unavailable from the current provider.</p> : null}</SectionCard>
+}
+
+function EventRiskSection({ eventRisk }) {
+  if (!eventRisk || eventRisk.status === 'unavailable') return <SectionCard title="Recent event risk" subtitle="Evidence monitoring is separate from the stock-strength score."><p className="text-sm text-slate-400">No validated news evidence is available for a recent event-risk assessment.</p></SectionCard>
+  return <SectionCard title="Recent event risk" subtitle="This flags observable event evidence; it does not predict price movement or replace a full risk assessment."><p className={`font-semibold ${eventRisk.level === 'elevated' ? 'text-amber-200' : 'text-emerald-200'}`}>{eventRisk.level === 'elevated' ? 'Potentially material event evidence identified' : 'No specific event-risk flag in the supplied articles'}</p><div className="mt-3 space-y-2 text-sm text-slate-300">{(eventRisk.evidence || []).map((item) => <p key={`${item.category}-${item.published_date}-${item.headline}`}><span className="font-medium text-white">{item.category.replaceAll('_', ' ')}</span>: {item.headline} · {formatDate(item.published_date)} · {item.source || 'Unknown source'}</p>)}{(eventRisk.warnings || []).map((warning) => <p key={warning} className="text-amber-200">{warning}</p>)}</div></SectionCard>
+}
+
+// Extended card keeps the existing visual contract while exposing provider
+// availability and event evidence without changing deterministic scores.
+function ComponentCard({ title, description, interpretation, component, children }) {
+  const warnings = (component?.warnings || []).map(readableWarning).filter(Boolean)
+  return <section className="rounded-3xl border border-white/10 bg-white/[0.03] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold text-white">{title}</h3><p className="mt-1 max-w-xl text-sm leading-6 text-slate-400">{description}</p></div><span className="rounded-full border border-cyan/20 bg-cyan/10 px-3 py-1 text-xs text-cyan">{component?.status || 'Unavailable'}</span></div><p className="mt-4 text-3xl font-semibold text-white">{isFiniteNumber(component?.score) ? `${Number(component.score).toFixed(1)} / 100` : 'Unavailable'}</p><p className="mt-3 text-sm leading-6 text-slate-300">{interpretation}</p><details className="mt-4 rounded-2xl border border-white/10 bg-black/10 p-3"><summary className="cursor-pointer list-none text-sm font-medium text-cyan"><span className="inline-flex items-center gap-2">Evidence and details <ChevronDown className="h-4 w-4" /></span></summary><div className="mt-3 space-y-2 text-sm text-slate-300">{(component?.evidence || []).slice(0, 6).map((item) => <p key={item}>• {readableEvidence(item)}</p>)}{warnings.map((item) => <p key={item} className="text-amber-200">{item}</p>)}{children}{title === 'Fundamental analysis' ? <div className="mt-4 space-y-3"><StatementSection title="Annual results" rows={component?.values?.annual_results} /><StatementSection title="Quarterly results" rows={component?.values?.quarterly_results} /></div> : null}{title === 'News and sentiment' ? <div className="mt-4"><EventRiskSection eventRisk={component?.values?.event_risk} /></div> : null}</div></details></section>
+}
+
+function StockAnalysis({ selected, analysis, loading, error, aiError, aiLoading, onExplain }) {
+  const components = analysis?.components || {}
+  const fundamentalMetrics = components.fundamentals?.values || {}
+  const technicalValues = components.technical?.values || {}
+  const newsValues = components.news?.values || {}
+  const hypeSignals = components.hype?.signals || []
+  const chartData = [['Fundamentals', components.fundamentals?.score], ['Technical', components.technical?.score], ['News', components.news?.score], ['Hype', components.hype?.score]].filter(([, value]) => isFiniteNumber(value)).map(([metric, value]) => ({ metric, value: Number(value) }))
+  const excluded = Object.entries(components).filter(([, component]) => !isFiniteNumber(component?.score)).map(([key]) => key)
+  const effectiveWeights = analysis?.overall?.effective_weights || {}
+  return <div className="space-y-6"><section className="glass-panel rounded-3xl p-6"><p className="text-xs uppercase tracking-[0.2em] text-cyan">Selected stock</p><h2 className="mt-2 text-3xl font-semibold text-white">{selected.name} <span className="text-cyan">({selected.symbol})</span></h2>{loading ? <div className="mt-5 rounded-2xl border border-cyan/20 bg-cyan/5 p-4 text-sm text-slate-300">Loading a fresh analysis for this stock. Previous results are not shown.</div> : error ? <div className="mt-5 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">{error}</div> : analysis ? <><div className="mt-5 flex flex-wrap items-start justify-between gap-4"><div><p className="text-sm text-slate-400">Overall strength</p><p className="mt-1 text-4xl font-semibold text-white">{analysis.status === 'available' && isFiniteNumber(analysis.overall?.score) ? `${Number(analysis.overall.score).toFixed(1)} / 100` : 'Insufficient evidence'}</p></div><div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-100">{analysis.comparison?.classification || 'Insufficient evidence'}</div></div><p className="mt-4 text-sm leading-6 text-slate-300">The overall score summarizes available evidence using weighted component scores. It is not a probability of future returns or a buy/sell recommendation.</p><p className="mt-2 text-sm leading-6 text-slate-400">{analysis.overall?.explanation} Contributing components: {(analysis.overall?.eligible_components || []).join(', ') || 'none'}.</p><details className="mt-4 rounded-2xl border border-white/10 bg-black/10 p-4"><summary className="cursor-pointer list-none text-sm font-medium text-cyan"><span className="inline-flex items-center gap-2">How is this calculated? <ChevronDown className="h-4 w-4" /></span></summary><div className="mt-3 space-y-2 text-sm text-slate-300"><p>Each available component keeps its configured weight; eligible weights are renormalized when components are missing.</p><div className="grid gap-2 sm:grid-cols-2">{Object.entries(effectiveWeights).map(([key, value]) => <MetricRow key={key} label={key} value={formatPercentRatio(value)} />)}</div>{excluded.length ? <p className="text-amber-200">Excluded because a score was unavailable: {excluded.join(', ')}. The overall score is not shown unless the backend has sufficient evidence.</p> : <p>No component was excluded from this result.</p>}</div></details></> : null}</section>{loading || error || !analysis ? null : <><div className="grid gap-6 xl:grid-cols-2"><SectionCard title="Component strength map" subtitle="Only components with valid scores are plotted.">{chartData.length ? <ScoreRadar data={chartData} /> : <p className="p-6 text-sm text-slate-400">No valid component scores are available.</p>}</SectionCard><SectionCard title="Component evidence snapshot" subtitle="This compares current component scores; it is not historical performance."><ConfidenceChart data={chartData.map(({ metric, value }) => ({ month: metric, confidence: value }))} /></SectionCard></div><section className="grid gap-4 md:grid-cols-2"><ComponentCard title="Fundamental analysis" description="Business quality metrics such as growth, profitability, leverage, cash flow, and valuation context." interpretation={componentInterpretation('fundamentals', components.fundamentals, fundamentalMetrics)} component={components.fundamentals}><MetricRow label="Sector" value={fundamentalMetrics.sector} /><MetricRow label="Reporting period" value={formatDate(fundamentalMetrics.period)} /></ComponentCard><ComponentCard title="Technical analysis" description="Observed price trend, momentum, moving averages, volatility, and volume context." interpretation={componentInterpretation('technical', components.technical, technicalValues)} component={components.technical}><MetricRow label="Trend" value={technicalValues.trend} /><MetricRow label="RSI" value={formatMetric('rsi', technicalValues.rsi)} help="Recent price momentum on a 0–100 scale; it is a signal to investigate, not a trade instruction." /><MetricRow label="SMA 20 / 50 / 200" value={`${formatMetric('sma_20', technicalValues.sma_20)} / ${formatMetric('sma_50', technicalValues.sma_50)} / ${formatMetric('sma_200', technicalValues.sma_200)}`} help="Average closing price over the named number of trading sessions." /><MetricRow label="MACD histogram" value={formatMetric('histogram', technicalValues.macd?.histogram)} help="Momentum difference between MACD and its signal line." /><MetricRow label="Bollinger range" value={technicalValues.bollinger_bands ? `${formatMetric('lower', technicalValues.bollinger_bands.lower)} – ${formatMetric('upper', technicalValues.bollinger_bands.upper)}` : null} help="Price range around a moving average that reflects recent volatility." /><MetricRow label="Indicator date" value={formatDate(technicalValues.date)} /></ComponentCard><ComponentCard title="News and sentiment" description="Available recent or historical company-specific news and sentiment evidence." interpretation={componentInterpretation('news', components.news, newsValues)} component={components.news}><MetricRow label="News status" value={newsValues.status} /><MetricRow label="Articles" value={formatNumber(newsValues.article_count, 0)} /></ComponentCard><ComponentCard title="Hype detection" description="Observable price movement, trading volume, and current-news activity where available; social-media activity is not measured." interpretation={componentInterpretation('hype', components.hype, {})} component={components.hype}>{hypeSignals.map((signal) => { const formatted = formatHypeSignal(signal); return <MetricRow key={signal.name} label={signal.name} value={`${formatted.value} · ${formatted.baseline}`} /> })}</ComponentCard></section><SectionCard title="Fundamental metrics" subtitle={`Reported values are formatted from provider units. Sector: ${fundamentalMetrics.sector || 'Unavailable'} · Period: ${formatDate(fundamentalMetrics.period)}`}><div className="grid gap-x-8 md:grid-cols-2"><MetricRow label="Revenue growth" value={formatMetric('revenue_growth', fundamentalMetrics.revenue_growth)} /><MetricRow label="Earnings growth" value={formatMetric('earnings_growth', fundamentalMetrics.earnings_growth)} /><MetricRow label="Profit margin" value={formatMetric('profit_margin', fundamentalMetrics.profit_margin)} /><MetricRow label="Operating margin" value={formatMetric('operating_margin', fundamentalMetrics.operating_margin)} /><MetricRow label="ROE" value={formatMetric('roe', fundamentalMetrics.roe)} /><MetricRow label="Debt/equity" value={formatMetric('debt_to_equity', fundamentalMetrics.debt_to_equity)} /><MetricRow label="Interest coverage" value={formatMetric('interest_coverage', fundamentalMetrics.interest_coverage)} /><MetricRow label="Trailing P/E" value={formatMetric('pe_ratio', fundamentalMetrics.pe_ratio)} /><MetricRow label="Operating cash flow" value={formatMetric('operating_cash_flow', fundamentalMetrics.operating_cash_flow)} /><MetricRow label="Free cash flow" value={formatMetric('free_cash_flow', fundamentalMetrics.free_cash_flow)} /></div></SectionCard><SectionCard title="News evidence" subtitle={`Status: ${newsValues.status || 'unavailable'} · Article count: ${newsValues.article_count ?? 0}`}><div className="space-y-3">{(newsValues.articles || []).slice(0, 5).map((article) => <div key={`${article.url}-${article.published_date}`} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4"><p className="text-xs text-slate-400">{newsValues.status === 'current' ? 'Current' : newsValues.status === 'historical' ? 'Historical' : 'Unavailable'} · {formatDate(article.published_date)} · {article.source || 'Unknown source'}</p><p className="mt-2 text-sm text-white">{article.headline}</p>{article.url ? <a className="mt-2 inline-block text-xs text-cyan underline" href={article.url} target="_blank" rel="noreferrer">Open source</a> : null}</div>)}{!newsValues.articles?.length ? <p className="text-sm text-slate-400">{newsValues.status === 'unavailable' ? 'Current news is temporarily unavailable.' : 'No suitable company-specific news evidence is available.'} Missing news is not treated as negative sentiment.</p> : null}</div></SectionCard><SectionCard title="Hype evidence" subtitle="Observable signals are shown with their comparison baselines. This does not prove manipulation, a bubble, or overvaluation."><div className="space-y-2 text-sm text-slate-300">{hypeSignals.map((signal) => { const formatted = formatHypeSignal(signal); return <p key={signal.name}>• <span className="font-medium text-white">{signal.name}</span>: {formatted.value}; baseline: {formatted.baseline}.</p> })}{!hypeSignals.length ? <p className="text-slate-400">Insufficient evidence for hype classification. Missing inputs are not treated as zero.</p> : null}</div></SectionCard><SectionCard title="Hype versus fundamentals" subtitle="A high attention score is not, by itself, an overvaluation conclusion."><p className="font-semibold text-white">{analysis.comparison?.classification || 'Insufficient evidence'}</p><div className="mt-3 space-y-2 text-sm text-slate-300">{(analysis.comparison?.evidence || []).map((item) => <p key={item}>• {item}</p>)}{(analysis.comparison?.limitations || []).map((item) => <p key={item} className="text-amber-200">{item}</p>)}</div></SectionCard><SectionCard title="Optional AI explanation" subtitle="AI interprets the computed result but cannot change its scores.">{aiError ? <div className="mb-4 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">{aiError}</div> : null}<button className="btn-secondary" onClick={onExplain} disabled={aiLoading}>{aiLoading ? 'Generating...' : 'Explain this analysis'}</button>{analysis.ai?.answer ? <p className="mt-4 whitespace-pre-line text-sm leading-7 text-slate-300">{analysis.ai.answer}</p> : <p className="mt-4 text-sm text-slate-400">Deterministic analysis remains usable if Gemini is unavailable.</p>}</SectionCard></>}</div>
+}
 
 function AnalyticsPage() {
-  const [selectedSymbol, setSelectedSymbol] = useState(indianStockSymbols[0])
-  const [intelligence, setIntelligence] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [query, setQuery] = useState('')
+  const [selected, setSelected] = useState(null)
+  const [matches, setMatches] = useState([])
+  const [highlightedIndex, setHighlightedIndex] = useState(-1)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchComplete, setSearchComplete] = useState(false)
+  const [overview, setOverview] = useState(null)
+  const [overviewLoading, setOverviewLoading] = useState(true)
+  const [analysis, setAnalysis] = useState(null)
+  const [analysisLoading, setAnalysisLoading] = useState(false)
   const [error, setError] = useState('')
-
-  useEffect(() => {
-    let cancelled = false
-
-    async function loadIntelligence() {
-      try {
-        setLoading(true)
-        setError('')
-        const result = await fetchStockIntelligence(selectedSymbol)
-        if (!cancelled) {
-          setIntelligence(result.document || result)
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err.message || 'Unable to load analytics.')
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false)
-        }
-      }
-    }
-
-    loadIntelligence()
-
-    return () => {
-      cancelled = true
-    }
-  }, [selectedSymbol])
-
-  const analyticsStats = useMemo(() => {
-    if (!intelligence) {
-      return []
-    }
-
-    return [
-      {
-        title: 'Hype score',
-        value: `${Math.round((intelligence.news?.hype_score || 0) * 100)} / 100`,
-        description: `Narrative intensity is currently ${intelligence.news?.hype_label || 'Unknown'}.`,
-      },
-      {
-        title: 'Sentiment',
-        value: intelligence.news?.overall_sentiment || 'Unknown',
-        description: `Positive ${(intelligence.news?.positive_score || 0).toFixed(2)} | Negative ${(intelligence.news?.negative_score || 0).toFixed(2)}`,
-      },
-      {
-        title: 'Technical trend',
-        value: intelligence.market?.trend || 'Unknown',
-        description: `RSI ${(intelligence.market?.rsi || 0).toFixed(2)} with ${shortSymbolLabel(selectedSymbol)} as the active symbol.`,
-      },
-    ]
-  }, [intelligence, selectedSymbol])
-
-  const radarData = useMemo(() => {
-    if (!intelligence) {
-      return []
-    }
-
-    const positive = (intelligence.news?.positive_score || 0) * 100
-    const negative = (intelligence.news?.negative_score || 0) * 100
-    const neutral = (intelligence.news?.neutral_score || 0) * 100
-    const rsi = intelligence.market?.rsi || 0
-    const trendScore = intelligence.market?.trend === 'Bullish' ? 80 : intelligence.market?.trend === 'Bearish' ? 35 : 55
-    const hype = (intelligence.news?.hype_score || 0) * 100
-
-    return [
-      { metric: 'Positive', value: Number(positive.toFixed(1)) },
-      { metric: 'Negative', value: Number(negative.toFixed(1)) },
-      { metric: 'Neutral', value: Number(neutral.toFixed(1)) },
-      { metric: 'RSI', value: Number(rsi.toFixed(1)) },
-      { metric: 'Trend', value: trendScore },
-      { metric: 'Hype', value: Number(hype.toFixed(1)) },
-    ]
-  }, [intelligence])
-
-  const chartData = useMemo(() => {
-    if (!intelligence) {
-      return []
-    }
-
-    return [
-      {
-        month: 'News',
-        confidence: Math.round((intelligence.news?.positive_score || 0) * 100),
-        risk: Math.round((intelligence.news?.negative_score || 0) * 100),
-      },
-      {
-        month: 'Trend',
-        confidence: intelligence.market?.trend === 'Bullish' ? 80 : intelligence.market?.trend === 'Bearish' ? 35 : 55,
-        risk: intelligence.market?.trend === 'Bearish' ? 72 : 38,
-      },
-      {
-        month: 'Momentum',
-        confidence: Math.round(intelligence.market?.rsi || 0),
-        risk: Math.round((intelligence.news?.hype_score || 0) * 100),
-      },
-    ]
-  }, [intelligence])
-
-  return (
-    <div>
-      <PageHeader
-        eyebrow="Analytics"
-        title="Truth-versus-hype analytics"
-        description="This screen visualizes the core differentiator from the project brief: hype detection balanced against fundamentals, technicals, and resilience signals."
-        actions={
-          <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
-            <span className="text-sm text-slate-300">Active symbol</span>
-            <select
-              className="bg-transparent text-sm text-white outline-none"
-              value={selectedSymbol}
-              onChange={(event) => setSelectedSymbol(event.target.value)}
-            >
-              {indianStockSymbols.map((symbol) => (
-                <option key={symbol} value={symbol} className="bg-slate-950">
-                  {symbol}
-                </option>
-              ))}
-            </select>
-          </label>
-        }
-      />
-
-      {error ? (
-        <div className="mb-6 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">{error}</div>
-      ) : null}
-
-      <div className="mb-6 grid gap-4 lg:grid-cols-3">
-        {loading ? (
-          <div className="glass-panel animate-pulse rounded-3xl p-5 text-slate-300 lg:col-span-3">Loading analytics...</div>
-        ) : analyticsStats.map(({ title, value, description }) => (
-          <div key={title} className="glass-panel elevate-hover rounded-3xl p-5">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-slate-400">{title}</p>
-              <span className="rounded-full border border-cyan/20 bg-cyan/10 px-3 py-1 text-xs font-medium text-cyan">
-                {shortSymbolLabel(selectedSymbol)}
-              </span>
-            </div>
-            <h3 className="mt-4 font-display text-3xl text-white">{value}</h3>
-            <p className="mt-3 text-sm leading-6 text-slate-400">{description}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="page-grid">
-        <SectionCard
-          title="Factor map"
-          subtitle="A single glance at sentiment, valuation, governance, and market structure."
-        >
-          {loading ? (
-            <div className="animate-pulse rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-slate-300">Preparing factor map...</div>
-          ) : (
-            <ScoreRadar data={radarData} />
-          )}
-        </SectionCard>
-
-        <SectionCard
-          title="Confidence versus risk"
-          subtitle="Live comparison between sentiment strength, technical posture, and hype intensity."
-        >
-          {loading ? (
-            <div className="animate-pulse rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-slate-300">Preparing comparative chart...</div>
-          ) : (
-            <ConfidenceChart data={chartData} />
-          )}
-          <div className="mt-4 rounded-[24px] border border-cyan/10 bg-gradient-to-r from-sky/10 via-violet/10 to-transparent p-4">
-            <p className="text-sm leading-6 text-slate-300">
-              Interpretation: {intelligence?.analysis?.recommendation || 'Current signals are still loading.'}
-            </p>
-          </div>
-        </SectionCard>
-      </div>
-    </div>
-  )
+  const [aiError, setAiError] = useState('')
+  const [searchError, setSearchError] = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
+  const requestRef = useRef(0)
+  const searchRef = useRef(0)
+  async function loadOverview() { setOverviewLoading(true); setError(''); try { setOverview(await fetchMarketOverview()) } catch (err) { setError(err.message || 'Unable to load market overview.') } finally { setOverviewLoading(false) } }
+  async function loadAnalysis(stock = selected, withAi = false) { if (!stock) return; const requestId = ++requestRef.current; try { if (withAi) { setAiLoading(true); setAiError('') } else { setAnalysisLoading(true); setError(''); setAiError('') }; const result = await fetchStrengthAnalysis(stock.symbol, { withAi }); if (requestId === requestRef.current) setAnalysis(result) } catch (err) { if (requestId === requestRef.current) { if (withAi) setAiError(err.message || 'Unable to generate the AI explanation.'); else setError(err.message || 'Unable to load analytics.') } } finally { if (requestId === requestRef.current) { setAnalysisLoading(false); setAiLoading(false) } } }
+  useEffect(() => { void loadOverview() }, [])
+  useEffect(() => { const value = query.trim(); if (!value) { setMatches([]); setSearchError(''); setSearchComplete(false); setHighlightedIndex(-1); return undefined }; const timer = setTimeout(async () => { const requestId = ++searchRef.current; try { setSearchLoading(true); setSearchError(''); setSearchComplete(false); const result = await fetchNseStocks({ search: value, limit: 8, offset: 0 }); if (requestId === searchRef.current) { setMatches(result.stocks || []); setHighlightedIndex(-1); setSearchComplete(true) } } catch (err) { if (requestId === searchRef.current) setSearchError(err.message || 'Unable to search NSE stocks.') } finally { if (requestId === searchRef.current) { setSearchLoading(false); setSearchComplete(true) } } }, 300); return () => clearTimeout(timer) }, [query])
+  useEffect(() => { if (!query.trim() && document.activeElement?.id === 'analytics-stock-search') document.activeElement.blur() }, [query])
+  function chooseStock(stock) { const next = { symbol: shortSymbolLabel(stock.symbol), name: stock.name || stock.company_name || stock.symbol }; setSelected(next); setQuery(''); setMatches([]); setAnalysis(null); setAiError(''); void loadAnalysis(next) }
+  function returnToOverview() { setSelected(null); setAnalysis(null); setError(''); setAiError(''); void loadOverview() }
+  function handleSearchBlur() { setQuery(''); setMatches([]); setSearchError(''); setSearchComplete(false); setHighlightedIndex(-1) }
+  function handleSearchKeyDown(event) { if (event.key === 'ArrowDown') { event.preventDefault(); setHighlightedIndex((index) => Math.min(index + 1, matches.length - 1)) } else if (event.key === 'ArrowUp') { event.preventDefault(); setHighlightedIndex((index) => Math.max(index - 1, 0)) } else if (event.key === 'Enter' && highlightedIndex >= 0 && matches[highlightedIndex]) { event.preventDefault(); chooseStock(matches[highlightedIndex]) } else if (event.key === 'Escape') { setQuery(''); setMatches([]); event.currentTarget.blur() } }
+  return <div><PageHeader eyebrow="Analytics" title={selected ? 'Hype vs Reality' : 'Market pulse'} description={selected ? 'Compare a company’s financial condition, market trend, available news, and observable trading activity.' : 'See how the NIFTY 50 and Sensex are moving, then drill into any supported NSE stock for its full strength analysis.'} actions={<button className="btn-secondary inline-flex items-center gap-2" onClick={() => selected ? void loadAnalysis() : void loadOverview()} disabled={selected ? analysisLoading : overviewLoading}><RefreshCw className="h-4 w-4" /> Refresh {selected ? 'analysis' : 'market'}</button>} /><section className="glass-panel relative z-20 mb-6 !overflow-visible rounded-3xl p-5" style={{ isolation: 'isolate' }}><label htmlFor="analytics-stock-search" className="text-xs uppercase tracking-[0.2em] text-cyan">Search NSE stocks</label><div className="relative z-30 mt-3"><Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input id="analytics-stock-search" aria-controls="analytics-stock-suggestions" aria-expanded={Boolean(query.trim())} aria-activedescendant={highlightedIndex >= 0 ? `analytics-stock-option-${highlightedIndex}` : undefined} className="input-shell h-13 w-full !pl-12" value={query} onChange={(event) => setQuery(event.target.value)} onBlur={handleSearchBlur} onKeyDown={handleSearchKeyDown} placeholder="Search any supported NSE stock, e.g. TCS or Tata Consultancy Services" autoComplete="off" />{query.trim() ? <div id="analytics-stock-suggestions" role="listbox" className="absolute left-0 right-0 top-[calc(100%+8px)] z-40 max-h-80 overflow-y-auto rounded-2xl border border-white/10 bg-slate-950 p-2 shadow-2xl">{searchLoading ? <p className="p-3 text-sm text-slate-400">Searching NSE directory...</p> : null}{searchError ? <p className="p-3 text-sm text-rose-200">{searchError}</p> : null}{!searchLoading && !searchError && searchComplete && !matches.length ? <p className="p-3 text-sm text-slate-400">No supported NSE stocks found.</p> : null}{matches.map((stock, index) => <button id={`analytics-stock-option-${index}`} role="option" aria-selected={highlightedIndex === index} key={stock.symbol} className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-left hover:bg-white/[0.08] ${highlightedIndex === index ? 'bg-white/[0.08]' : ''}`} onMouseEnter={() => setHighlightedIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseStock(stock)}><span className="font-medium text-white">{stock.name}</span><span className="text-xs text-cyan">{shortSymbolLabel(stock.symbol)}</span></button>)}</div> : null}</div><div className="mt-5 border-t border-white/10 pt-4"><div className="flex items-center justify-between gap-3"><p className="text-xs uppercase tracking-[0.2em] text-slate-400">NIFTY 50 quick selection</p><p className="text-xs text-slate-500">Search above for other NSE stocks</p></div><div className="mt-3 flex max-h-24 flex-wrap gap-2 overflow-y-auto pr-1">{nifty50Symbols.map((item) => <button type="button" key={item} className={`rounded-full border px-3 py-1.5 text-xs transition ${selected?.symbol === item ? 'border-cyan bg-cyan/20 text-cyan' : 'border-white/10 bg-white/[0.04] text-slate-300 hover:border-cyan/40'}`} onClick={() => chooseStock({ symbol: item, name: item })}>{item}</button>)}</div></div>{selected ? <button className="mt-4 text-xs text-cyan underline" onClick={returnToOverview}>Back to market overview</button> : null}</section>{error && !selected ? <div className="mb-6 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">{error}</div> : null}{selected ? <StockAnalysis selected={selected} analysis={analysis} loading={analysisLoading} error={error} aiError={aiError} aiLoading={aiLoading} onExplain={() => void loadAnalysis(selected, true)} /> : <MarketOverview overview={overview} loading={overviewLoading} error={error} />}</div>
 }
 
 export default AnalyticsPage

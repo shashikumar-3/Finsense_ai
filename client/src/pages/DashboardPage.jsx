@@ -6,6 +6,7 @@ import MetricCard from '../components/MetricCard'
 import SectionCard from '../components/SectionCard'
 import { AllocationChart, TrendChart } from '../components/Charts'
 import { indianStockSymbols, shortSymbolLabel } from '../data/stocksData'
+import { isCurrentNews } from '../lib/newsFreshness'
 
 const FEATURED_SYMBOLS = indianStockSymbols.slice(0, 4)
 
@@ -33,6 +34,7 @@ function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [backgroundRefreshing, setBackgroundRefreshing] = useState(false)
   const [error, setError] = useState('')
+  const [lastRefreshed, setLastRefreshed] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -55,6 +57,7 @@ function DashboardPage() {
 
         setItems(intelligenceItems.filter((item) => item?.document))
         setStoreStats(statsResult)
+        setLastRefreshed(new Date())
         setLoading(false)
 
         setBackgroundRefreshing(true)
@@ -99,6 +102,7 @@ function DashboardPage() {
       ])
       setItems(batchResult.items || [])
       setStoreStats(statsResult)
+      setLastRefreshed(new Date())
     } catch (err) {
       setError(err.message || 'Unable to refresh dashboard intelligence.')
     } finally {
@@ -112,7 +116,7 @@ function DashboardPage() {
     () =>
       documents.map((document) => ({
         month: shortSymbolLabel(document.symbol),
-        wealth: Number(((document.news?.hype_score || 0) * 100).toFixed(1)),
+        wealth: isCurrentNews(document.news) ? Number(((document.news?.hype_score || 0) * 100).toFixed(1)) : null,
         confidence: Number((document.market?.rsi || 0).toFixed(1)),
       })),
     [documents],
@@ -121,10 +125,10 @@ function DashboardPage() {
   const heroMetrics = useMemo(() => {
     const averageHype =
       documents.length > 0
-        ? documents.reduce((total, document) => total + (document.news?.hype_score || 0), 0) / documents.length
+        ? documents.reduce((total, document) => total + (isCurrentNews(document.news) ? (document.news?.hype_score || 0) : 0), 0) / documents.length
         : 0
     const bearishCount = documents.filter((document) => document.market?.trend === 'Bearish').length
-    const newsReady = documents.filter((document) => document.news?.is_valid).length
+    const newsReady = documents.filter((document) => isCurrentNews(document.news)).length
 
     return [
       {
@@ -163,7 +167,7 @@ function DashboardPage() {
   const insightFeed = useMemo(
     () =>
       documents.flatMap((document) =>
-        (document.news?.top_headlines || []).slice(0, 1).map((headline) => ({
+        (isCurrentNews(document.news) ? (document.news?.top_headlines || []) : []).slice(0, 1).map((headline) => ({
           key: `${document.symbol}-${headline.url}`,
           symbol: shortSymbolLabel(document.symbol),
           title: headline.headline,
@@ -176,6 +180,10 @@ function DashboardPage() {
 
   return (
     <div>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3 px-1 text-xs text-slate-400">
+        <span>Market intelligence overview</span>
+        <span>{lastRefreshed ? `Last refreshed ${lastRefreshed.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}` : 'Preparing latest snapshot'}</span>
+      </div>
       <section className="hero-shell mb-8 min-h-[620px] px-5 py-6 md:px-8 md:py-8 lg:px-12 lg:py-10">
         <div className="tech-line left-6 top-16 hidden h-28 w-28 lg:block" />
         <div className="tech-line bottom-14 right-10 hidden h-32 w-32 lg:block" />
@@ -230,7 +238,7 @@ function DashboardPage() {
       </section>
 
       {error ? (
-        <div className="mb-6 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">{error}</div>
+        <div role="alert" className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200"><span>{error}</span><button type="button" className="btn-secondary px-3 py-2 text-xs" onClick={handleRefresh}>Retry</button></div>
       ) : null}
 
       <div className="page-grid">
@@ -245,15 +253,17 @@ function DashboardPage() {
         >
           {loading ? (
             <div className="animate-pulse rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-slate-300">Loading dashboard intelligence...</div>
-          ) : (
+          ) : signalPoints.length ? (
             <TrendChart data={signalPoints} />
+          ) : (
+            <div className="flex min-h-64 items-center justify-center rounded-2xl border border-dashed border-white/15 p-6 text-center text-sm text-slate-400">No stock intelligence is available yet. Refresh the briefing after the market-data service is ready.</div>
           )}
         </SectionCard>
 
         <SectionCard title="Sector mix" subtitle="Distribution of the live featured symbols by sector.">
           {loading ? (
             <div className="animate-pulse rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-slate-300">Preparing sector breakdown...</div>
-          ) : (
+          ) : sectorAllocation.length ? (
             <>
               <AllocationChart data={sectorAllocation} />
               <div className="mt-2 space-y-3">
@@ -268,6 +278,8 @@ function DashboardPage() {
                 ))}
               </div>
             </>
+          ) : (
+            <div className="flex min-h-64 items-center justify-center rounded-2xl border border-dashed border-white/15 p-6 text-center text-sm text-slate-400">Sector distribution will appear when supported stock metadata is available.</div>
           )}
         </SectionCard>
       </div>
@@ -278,7 +290,7 @@ function DashboardPage() {
           subtitle="Each live card is generated from the current stock-level market and news document."
         >
           <div className="grid gap-4 md:grid-cols-3">
-            {spotlightCards.map((card) => (
+            {spotlightCards.length ? spotlightCards.map((card) => (
               <div
                 key={`${card.symbol}-${card.companyName}`}
                 className={`elevate-hover rounded-[26px] border border-white/10 bg-gradient-to-b ${card.accent} p-5`}
@@ -296,7 +308,7 @@ function DashboardPage() {
                   Explore module <ArrowRight className="h-4 w-4" />
                 </Link>
               </div>
-            ))}
+            )) : <div className="rounded-2xl border border-dashed border-white/15 p-6 text-sm text-slate-400">No featured intelligence cards are available yet.</div>}
           </div>
         </SectionCard>
 
@@ -305,7 +317,7 @@ function DashboardPage() {
           subtitle="Recent top headlines and the matching recommendation pulled from each stock intelligence record."
         >
           <div className="space-y-4">
-            {insightFeed.map((item) => (
+            {insightFeed.length ? insightFeed.map((item) => (
               <div key={item.key} className="elevate-hover rounded-[24px] border border-white/10 bg-white/[0.03] p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -317,7 +329,7 @@ function DashboardPage() {
                   </span>
                 </div>
               </div>
-            ))}
+            )) : <div className="rounded-2xl border border-dashed border-white/15 p-6 text-sm text-slate-400">No recent headline context is available. This page will keep the last verified data separate from empty results.</div>}
           </div>
         </SectionCard>
       </div>

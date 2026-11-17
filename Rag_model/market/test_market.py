@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from pprint import pprint
+import unittest
+from unittest.mock import patch
+
+import pandas as pd
 
 try:
     from .scanner import scan_stocks
@@ -15,6 +19,30 @@ except ImportError:
 
 
 TEST_SYMBOLS = ["RELIANCE.NS", "TCS.NS", "INFY.NS"]
+
+
+class FakeTicker:
+    fast_info = {"last_price": 100, "previous_close": 99, "last_volume": 1000, "market_cap": 1000000}
+    info = {
+        "longName": "Example Industries Limited",
+        "sector": "Industrials",
+        "industry": "Specialty Industrial Machinery",
+        "currency": "INR",
+        "trailingPE": 18.2,
+    }
+
+    def history(self, **kwargs):
+        return pd.DataFrame({"Close": [99, 100]})
+
+
+class StockMetadataTests(unittest.TestCase):
+    def test_company_metadata_is_normalized_from_yahoo_info(self):
+        with patch("Rag_model.market.stocks.yf.Ticker", return_value=FakeTicker()):
+            result = get_stock_info("EXAMPLE")
+        self.assertEqual(result["sector"], "Industrials")
+        self.assertEqual(result["industry"], "Specialty Industrial Machinery")
+        self.assertEqual(result["company_name"], "Example Industries Limited")
+        self.assertEqual(result["metadata_source"], "Yahoo Finance")
 
 
 def run_single_stock_test(symbol: str) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ ROOT_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(ROOT_ENV_PATH)
 MARKET_TTL_MINUTES = max(int(os.getenv("MARKET_TTL_MINUTES") or 30), 1)
 NEWS_TTL_MINUTES = max(int(os.getenv("NEWS_TTL_MINUTES") or 180), 1)
+CURRENT_NEWS_MAX_AGE_DAYS = 7
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -56,6 +58,40 @@ def _is_fresh(timestamp: datetime | None, ttl_minutes: int) -> bool:
     return age_seconds <= (ttl_minutes * 60)
 
 
+def _annotate_news_freshness(document: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(document, dict):
+        return document
+
+    annotated = copy.deepcopy(document)
+    news = annotated.get("news")
+    if not isinstance(news, dict):
+        return annotated
+
+    article_dates = []
+    for article in (news.get("articles") or news.get("top_headlines") or []):
+        timestamp = _parse_iso_datetime(article.get("published_date")) if isinstance(article, dict) else None
+        if timestamp:
+            article_dates.append(timestamp)
+
+    news_timestamp = _document_timestamp(annotated, "news_updated_at")
+    article_dates_valid = bool(article_dates) and all(
+        0 <= (datetime.now(timezone.utc) - timestamp).total_seconds() <= CURRENT_NEWS_MAX_AGE_DAYS * 24 * 60 * 60
+        for timestamp in article_dates
+    )
+    is_current = bool(news.get("is_valid")) and _is_fresh(news_timestamp, NEWS_TTL_MINUTES) and article_dates_valid
+    news["is_current"] = is_current
+    news["freshness_status"] = "current" if is_current else "stale"
+    news["freshness"] = {
+        "status": "current" if is_current else "historical",
+        "max_age_days": CURRENT_NEWS_MAX_AGE_DAYS,
+    }
+    news["historical_only"] = not is_current
+    if not is_current:
+        news["error"] = "Recent news is unavailable; cached articles are historical only."
+    annotated["news"] = news
+    return annotated
+
+
 def get_stock(
     symbol: str,
     company_name: str = "",
@@ -69,8 +105,10 @@ def get_stock(
 
     if cached_only:
         if existing_item:
-            existing_item["found"] = True
-            return existing_item
+            cached_item = copy.deepcopy(existing_item)
+            cached_item["found"] = True
+            cached_item["document"] = _annotate_news_freshness(cached_item.get("document"))
+            return cached_item
         return {
             "symbol": normalized_symbol,
             "found": False,
@@ -93,13 +131,40 @@ def get_stock(
             refresh_news=include_news,
         )
 
+    annotated_existing = _annotate_news_freshness(existing_document)
+    existing_news = (annotated_existing or {}).get("news") or {}
+    existing_market = (annotated_existing or {}).get("market") or {}
+    # Older cached documents were built before company metadata was wired into
+    # the Yahoo adapter. Refresh those records once so sector/industry can be
+    # populated, while respecting an explicit provider-unavailable status on
+    # newer records and avoiding an endless refresh loop.
+    metadata_missing_from_legacy_document = (
+        "metadata_status" not in existing_market
+        and not existing_market.get("sector")
+        and not existing_market.get("industry")
+    )
+    if metadata_missing_from_legacy_document:
+        return upsert_single_stock(
+            normalized_symbol,
+            company_name=company_name,
+            include_news=include_news,
+            refresh_news=include_news,
+        )
     market_fresh = _is_fresh(_document_timestamp(existing_document, "market_updated_at"), MARKET_TTL_MINUTES)
     news_fresh = _is_fresh(_document_timestamp(existing_document, "news_updated_at"), NEWS_TTL_MINUTES)
+    existing_articles = existing_news.get("articles") or existing_news.get("top_headlines") or []
+    news_requires_refresh = include_news and (
+        not existing_news.get("is_valid")
+        or existing_news.get("is_current") is False
+        or len(existing_articles) < 3
+    )
 
-    if market_fresh and (not include_news or news_fresh):
+    if market_fresh and (not include_news or (news_fresh and not news_requires_refresh)):
+        existing_item = copy.deepcopy(existing_item)
+        existing_item["document"] = annotated_existing
         return existing_item
 
-    refresh_news = include_news and not news_fresh
+    refresh_news = include_news and (not news_fresh or news_requires_refresh)
     return upsert_single_stock(
         normalized_symbol,
         company_name=company_name,
@@ -116,7 +181,7 @@ def search(query: str, limit: int = 5) -> list[dict[str, Any]]:
             "company_name": item.get("company_name"),
             "score": item.get("score", 0.0),
             "metadata": item.get("metadata"),
-            "document": item.get("document"),
+            "document": _annotate_news_freshness(item.get("document")),
         }
         for item in query_store(query, limit=max(limit, 1))
     ]
@@ -158,7 +223,7 @@ def search_by_text_filters(
             "company_name": item.get("company_name"),
             "score": round(item.get("score", 0.0), 6),
             "metadata": item.get("metadata"),
-            "document": item.get("document"),
+            "document": _annotate_news_freshness(item.get("document")),
         }
         for item in items[: max(limit, 1)]
     ]

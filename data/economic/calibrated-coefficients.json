@@ -1,0 +1,43 @@
+{
+  "modelVersion": "ripple-calibrated-v1",
+  "retrievedAt": "2026-11-12T13:53:36.828Z",
+  "provenance": "historically_estimated",
+  "coefficients": {
+    "Financial Services": {
+      "usd_inr_return_pct": -1.417179837167,
+      "crude_oil_return_pct": 0.153377521216
+    },
+    "Information Technology": {
+      "usd_inr_return_pct": -0.158523900579,
+      "crude_oil_return_pct": 0.108150946715
+    },
+    "Automobile": {
+      "usd_inr_return_pct": -0.831769471401,
+      "crude_oil_return_pct": 0.121585787434
+    },
+    "FMCG": {
+      "usd_inr_return_pct": -0.220146510656,
+      "crude_oil_return_pct": 0.031584421344
+    },
+    "Pharmaceuticals": {
+      "usd_inr_return_pct": 0.624367782902,
+      "crude_oil_return_pct": 0.03248926877
+    },
+    "Metals": {
+      "usd_inr_return_pct": -1.156113674257,
+      "crude_oil_return_pct": 0.125918320412
+    },
+    "Infrastructure": {
+      "usd_inr_return_pct": -1.138988113518,
+      "crude_oil_return_pct": 0.079578669625
+    },
+    "Oil & Gas": {
+      "usd_inr_return_pct": -1.313251355443,
+      "crude_oil_return_pct": 0.124771345997
+    }
+  },
+  "warnings": [
+    "Research artifact only; not enabled as the simulator default.",
+    "Coefficients are associations from the collected sample, not causal estimates."
+  ]
+}

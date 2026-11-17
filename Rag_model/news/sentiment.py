@@ -4,7 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from textblob import TextBlob
+try:
+    from textblob import TextBlob
+except ImportError:  # Keep sentiment usable in the lightweight server environment.
+    TextBlob = None
+
+POSITIVE_WORDS = {'beat', 'growth', 'gain', 'gains', 'profit', 'strong', 'surge', 'up', 'positive', 'record'}
+NEGATIVE_WORDS = {'miss', 'loss', 'losses', 'weak', 'drop', 'falls', 'down', 'negative', 'decline'}
+
+
+def _fallback_polarity(text: str) -> float:
+    words = set((text or '').lower().split())
+    positive = len(words & POSITIVE_WORDS)
+    negative = len(words & NEGATIVE_WORDS)
+    total = positive + negative
+    return 0.0 if total == 0 else (positive - negative) / total
 
 
 def _normalize_component_scores(polarity: float) -> tuple[float, float, float]:
@@ -52,7 +66,7 @@ def analyze_sentiment(news_articles: list[dict[str, Any]]) -> dict[str, Any]:
         summary = article.get("summary") or ""
         text = f"{headline}. {summary}".strip()
 
-        polarity = TextBlob(text).sentiment.polarity if text else 0.0
+        polarity = (TextBlob(text).sentiment.polarity if TextBlob is not None else _fallback_polarity(text)) if text else 0.0
         positive_score, negative_score, neutral_score = _normalize_component_scores(
             polarity
         )

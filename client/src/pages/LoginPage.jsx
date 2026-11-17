@@ -20,9 +20,10 @@ function LoginPage() {
     ? `${location.state.from.pathname}${location.state.from.search ?? ''}`
     : '/home'
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault()
-    const result = login(formData)
+    setError('')
+    const result = await login(formData)
 
     if (!result.ok) {
       setError(result.message)
@@ -32,16 +33,13 @@ function LoginPage() {
     navigate(redirectTo, { replace: true })
   }
 
-  async function handleGoogleLogin(credential) {
+  async function handleGoogleLogin() {
     setError('')
-    const result = await loginWithGoogle(credential)
+    const result = await loginWithGoogle()
 
     if (!result.ok) {
       setError(result.message)
-      return
     }
-
-    navigate(redirectTo, { replace: true })
   }
 
   return (
@@ -69,10 +67,11 @@ function LoginPage() {
 
       <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
         <label className="block">
-          <span className="mb-2 block text-sm text-slate-300">Email or username</span>
+          <span className="mb-2 block text-sm text-slate-300">Email address</span>
           <input
             className="input-shell w-full"
-            placeholder="riya@finsense.ai"
+            type="email"
+            placeholder="you@example.com"
             value={formData.identifier}
             onChange={(event) =>
               setFormData((current) => ({ ...current, identifier: event.target.value }))

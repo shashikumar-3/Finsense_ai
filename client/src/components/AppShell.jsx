@@ -1,9 +1,10 @@
 import { Menu, X } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { navItems } from '../data/mockData'
 import { useAuth } from '../context/AuthContext'
+import { usePreferences } from '../lib/preferences'
 
 function Brand() {
   return (
@@ -76,30 +77,35 @@ function UserSummary() {
   }
 
   return (
-    <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-cyan/20 bg-gradient-to-br from-cyan/30 to-aqua/20 font-semibold text-white shadow-neon">
-        {user.avatar}
-    </div>
+    <NavLink
+      to="/profile"
+      aria-label="Open profile"
+      title="Open profile"
+      className="flex h-11 w-11 items-center justify-center rounded-2xl border border-cyan/20 bg-gradient-to-br from-cyan/30 to-aqua/20 font-semibold text-white shadow-neon transition hover:scale-105 hover:border-cyan/50 hover:bg-cyan/20 focus:outline-none focus:ring-2 focus:ring-cyan/60"
+    >
+      {user.avatar}
+    </NavLink>
   )
 }
 
 function Header({ mobileOpen, setMobileOpen }) {
   return (
-    <header className="glass-panel sticky top-4 z-30 mx-auto mb-8 mt-4 flex w-full max-w-[1440px] items-center justify-between rounded-[26px] px-4 py-4 md:px-6">
+    <header className="glass-panel !overflow-visible sticky top-4 z-30 mx-auto mb-8 mt-4 flex w-full max-w-[1440px] items-center justify-between rounded-[26px] px-4 py-4 md:px-6">
       <Brand />
 
-      <nav className="hidden items-center gap-2 lg:flex">
+      <nav className="hidden items-center gap-2 xl:flex">
         <NavItems />
       </nav>
 
       <div className="flex items-center gap-3">
         <UserSummary />
-        <button className="icon-button lg:hidden" onClick={() => setMobileOpen((value) => !value)}>
+        <button className="icon-button xl:hidden" aria-label={mobileOpen ? 'Close navigation menu' : 'Open navigation menu'} onClick={() => setMobileOpen((value) => !value)}>
           {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
         </button>
       </div>
 
       <div
-        className={`absolute left-0 right-0 top-[calc(100%+12px)] rounded-[24px] border border-white/10 bg-panel/95 p-4 backdrop-blur-2xl transition lg:hidden ${
+        className={`absolute left-0 right-0 top-[calc(100%+12px)] rounded-[24px] border border-white/10 bg-panel/95 p-4 shadow-2xl backdrop-blur-2xl transition xl:hidden ${
           mobileOpen ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'
         }`}
       >
@@ -113,6 +119,14 @@ function Header({ mobileOpen, setMobileOpen }) {
 
 function AppShell({ children }) {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const { user } = useAuth()
+  const preferences = usePreferences(user)
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = preferences.adaptiveDarkMode ? 'dark' : 'light'
+    document.documentElement.dataset.density = preferences.compactDashboardDensity ? 'compact' : 'comfortable'
+    document.documentElement.dataset.motion = preferences.motionEnhancedTransitions ? 'enhanced' : 'reduced'
+  }, [preferences])
 
   return (
     <div className="min-h-screen bg-aurora text-slate-200">

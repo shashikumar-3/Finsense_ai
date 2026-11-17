@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 
 try:
@@ -12,6 +13,14 @@ try:
 except ImportError:
     from fetch_news import get_stock_news, normalize_symbol
     from sentiment import analyze_sentiment
+
+try:
+    from ..analysis.event_risk import classify_event
+except ImportError:
+    try:
+        from analysis.event_risk import classify_event
+    except ImportError:
+        from event_risk import classify_event
 
 
 def _normalize_headline(headline: str) -> str:
@@ -79,16 +88,20 @@ def process_stock_news(symbol: str) -> dict[str, Any]:
             "symbol": normalized_symbol,
             "is_valid": False,
             "provider": fetched_news.get("provider"),
-            "overall_sentiment": "Neutral",
-            "positive_score": 0.0,
-            "negative_score": 0.0,
-            "neutral_score": 0.0,
+            "overall_sentiment": None,
+            "sentiment_status": "unavailable",
+            "positive_score": None,
+            "negative_score": None,
+            "neutral_score": None,
             "news_frequency_count": 0,
             "repeated_headline_count": 0,
             "hype_score": 0.0,
             "hype_label": "Low",
             "top_headlines": [],
             "error": fetched_news.get("error", "Unable to fetch stock news."),
+            "historical_only": bool(fetched_news.get("historical_only")),
+            "freshness": fetched_news.get("freshness", {"status": "unavailable"}),
+            "retrieved_at": datetime.now(timezone.utc).isoformat(),
         }
 
     sentiment_result = analyze_sentiment(fetched_news.get("articles", []))
@@ -97,16 +110,20 @@ def process_stock_news(symbol: str) -> dict[str, Any]:
             "symbol": normalized_symbol,
             "is_valid": False,
             "provider": fetched_news.get("provider"),
-            "overall_sentiment": "Neutral",
-            "positive_score": 0.0,
-            "negative_score": 0.0,
-            "neutral_score": 0.0,
+            "overall_sentiment": None,
+            "sentiment_status": "unavailable",
+            "positive_score": None,
+            "negative_score": None,
+            "neutral_score": None,
             "news_frequency_count": fetched_news.get("article_count", 0),
             "repeated_headline_count": 0,
             "hype_score": 0.0,
             "hype_label": "Low",
             "top_headlines": [],
             "error": sentiment_result.get("error", "Unable to analyze sentiment."),
+            "historical_only": bool(fetched_news.get("historical_only")),
+            "freshness": fetched_news.get("freshness", {"status": "unavailable"}),
+            "retrieved_at": datetime.now(timezone.utc).isoformat(),
         }
 
     analyzed_articles = sentiment_result.get("articles", [])
@@ -121,6 +138,7 @@ def process_stock_news(symbol: str) -> dict[str, Any]:
             "sentiment": article.get("sentiment"),
             "polarity": article.get("polarity"),
             "relevance_score": article.get("relevance_score"),
+            "event_category": article.get("event_category") or classify_event(article.get("headline")),
         }
         for article in analyzed_articles
     ]
@@ -130,6 +148,7 @@ def process_stock_news(symbol: str) -> dict[str, Any]:
         "is_valid": True,
         "provider": fetched_news.get("provider"),
         "overall_sentiment": sentiment_result.get("overall_sentiment"),
+        "sentiment_status": "available",
         "positive_score": sentiment_result.get("positive_score"),
         "negative_score": sentiment_result.get("negative_score"),
         "neutral_score": sentiment_result.get("neutral_score"),
@@ -141,4 +160,7 @@ def process_stock_news(symbol: str) -> dict[str, Any]:
         "top_headlines": top_headlines,
         "articles": analyzed_articles,
         "error": None,
+        "historical_only": bool(fetched_news.get("historical_only")),
+        "freshness": fetched_news.get("freshness", {"status": "current"}),
+        "retrieved_at": datetime.now(timezone.utc).isoformat(),
     }
